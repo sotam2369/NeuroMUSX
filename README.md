@@ -56,3 +56,11 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 ## Specific instances
 1. Go to the script folder
 1. Test the model on specific problem sets: bash test_specific_[dataset_name].sh
+
+
+# Dependencies
+1. PyTorch
+1. PySAT
+1. NumPy
+1. PyG
+1. MatplotLib
