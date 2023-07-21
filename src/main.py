@@ -216,7 +216,7 @@ if __name__ == '__main__':
 
     print("Loading model...")
     if args.neuro_sat:
-        model = NeuroSAT()
+        model = NeuroSAT(iterations=5)
         optim = torch.optim.Adam(model.parameters(), lr=0.00002)
     else:
         if args.transfer_learning != "":
@@ -225,7 +225,7 @@ if __name__ == '__main__':
             model.load_state_dict(model_loaded[0])
         else:
             model = NeuroMUSX_V2(args.layers)
-        optim = torch.optim.Adam(model.parameters(), lr=0.00002)
+        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
         loss_func = Loss_NeuroMUSX(torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(total_negative/total_positive)), 
                                    torch.nn.BCEWithLogitsLoss())
     
@@ -247,7 +247,6 @@ if __name__ == '__main__':
     model.to(device)
 
     for epoch in range(1, args.epochs+1):
-        #print(model.gat_init[0].lin_r.weight[0])
         model.train()
         sum_loss = 0
         sum_mus_correct = 0
