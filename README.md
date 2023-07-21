@@ -5,13 +5,13 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 
 # Main framework of our Algorithm
 <p align="center">
-  <img src="imgs/proposal.png">
+  <img src="imgs/proposal_edit.png">
 </p>
 ​
 
 # Main Results
 ### Improving deletion-based algorithms using NeuroMUSX as a heuristic (Randomly trained)
-> Comparison per instance (instances from SAT Competition 2011 MUS Track)
+> Comparison with instances from SAT Competition 2011 MUS Track
 ​
 
 <p align="center">
@@ -28,7 +28,8 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 ​
 
 ### Improving deletion-based algorithms using NeuroMUSX as a heuristic (Specifically trained)
-​
+> Comparison with the problem sets that took the most time with Algorithm 1
+
 <p align="center">
   <img src="imgs/table2.png", width=60%>
 </p>
