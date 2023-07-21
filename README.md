@@ -59,7 +59,7 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 
 
 # Dependencies
-1. PyTorch
-1. PySAT
-1. PyG
-1. MatplotLib
+1. <a href="https://pytorch.org">PyTorch</a>
+1. <a href="https://pysathq.github.io">PySAT</a>
+1. <a href="https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html">PyG</a>
+1. <a href="https://matplotlib.org/stable/users/installing/index.html">Matplotlib</a>
