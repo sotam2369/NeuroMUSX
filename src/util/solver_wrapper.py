@@ -23,6 +23,6 @@ class Forqes(Solver):
     def solve(self, cnf_data, used_clauses, forqes_path='./forqes/forqes-linux-x86-64'):
         cnf = self.toCNF(cnf_data, used_clauses)
         lines = self.getOutput(cnf, [forqes_path, '-vv']).split("\n")
-        solution = [line.split() for line in lines if len(line) > 0 and line[0] is 'v']
+        solution = [line.split() for line in lines if len(line) > 0 and line[0] == 'v']
         solution_int = [int(var) for var in solution[0][1:-1]]
         return solution_int

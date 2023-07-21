@@ -6,3 +6,8 @@ mkdir plots
 cd dataset
 mkdir original
 mkdir processed
+cd ../
+cd models
+mkdir final
+mkdir per_epoch
+cd ../script

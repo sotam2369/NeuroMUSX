@@ -41,26 +41,25 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 # Usage
 ## Random instances
 ### Training
-1. Go to the script folder
-1. Setup the directories
+1. Move to the script folder: cd script
+1. Setup the directories: bash setup.sh
 1. Generate random instances: bash data_gen_random.sh
 1. Load the random instances for training: bash data_load_random.sh
 1. Train the model on random data: bash train_random.sh or python main.py
 1. Move the model file in models/final to pretrained_models directory
 
 ### Testing
-1. Go to the script folder
+1. Move to the script folder: cd script
 1. Download and unzip the cnf files from SAT Competiton 2011 MUS Track: bash data_load_satcomp2011.sh
 1. Test the model on instances from the SAT Competition: bash test_random.sh
 
 ## Specific instances
-1. Go to the script folder
+1. Move to the script folder: cd script
 1. Test the model on specific problem sets: bash test_specific_[dataset_name].sh
 
 
 # Dependencies
 1. PyTorch
 1. PySAT
-1. NumPy
 1. PyG
 1. MatplotLib
