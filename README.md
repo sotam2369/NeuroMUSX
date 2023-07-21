@@ -21,7 +21,7 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 
 <p float="left" align="center">
   <img src="imgs/musx_comparison.png" width="40%">
-  <img src="imgs/musx_size_comparison.png" width="40%">
+  <img src="imgs/mus_size_comparison.png" width="40%">
 </p>
 ​
 <br> <br>
