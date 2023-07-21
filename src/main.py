@@ -1,399 +1,365 @@
-import torch
-import pickle
-from torch_geometric.data import Data, Batch
-from torch_geometric.loader import DataLoader
-
-from tqdm import tqdm
-import numpy as np
-from sklearn.metrics import confusion_matrix
-import matplotlib.pyplot as plt
-import seaborn
+import argparse
+import random
 import os
 
-import model
+import pickle
+from tqdm import tqdm
+import numpy as np
 
-def getCorrectUnsat(batch, pred, data):
-    correct = 0
+import torch
+from torch_geometric.data import Data, Batch
+from torch_geometric.loader import DataLoader
+import torch_geometric.transforms as T
+from pysat.solvers import Solver
+
+from models import NeuroMUSX, NeuroSAT, NeuroMUSX_V2
+from loss import Loss_NeuroMUSX
+import matplotlib.pyplot as plt
+
+def getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id, solver_instances, mask):
+    score = 0
     for i in range(np.max(batch)+1):
-        pred_now = pred[batch == i]
-        if data.cnf_data[i].isUnsatCoreKissat(pred_now):
-            correct += 1
-    return correct
+        if y_sat_cpu[i] == 1:
+            continue
+        pred_mus_now = pred_mus[batch == i]
+        mask_now = mask[batch == i]
+        y_mus_cpu_now = y_mus_cpu[batch == i]
 
-def getCorrect(batch, pred, y_true):
-    correct = 0
-    for i in range(np.max(batch)+1):
-        pred_now = pred[batch == i]
-        y_true_now = y_true[batch == i]
-        if (pred_now == y_true_now).all():
-            correct += 1
-    return correct
+        threshold_list = pred_mus_now.tolist()
+        threshold_list.sort()
 
-def getF1Score(conf_mat):
-    if conf_mat[0][0] == 0 and conf_mat[0][1] == 0:
-        precision = 0
-    else:
-        precision = conf_mat[0][0]/(conf_mat[0][0]+conf_mat[0][1])
-    if conf_mat[0][0] == 0 and conf_mat[1][0] == 0:
-        recall = 0
-    else:
-        recall = conf_mat[0][0]/(conf_mat[0][0]+conf_mat[1][0])
-    if recall == 0 and precision == 0:
+        pred_mus_final = None
+        solver = solver_instances[id[i]]
+        for threshold in threshold_list:
+            if threshold == 0:
+                continue
+            pred_mus_temp = np.where(pred_mus_now >= threshold, 1, 0)
+            if pred_mus_final is None or isUnsat(pred_mus_temp, solver):
+                pred_mus_final = pred_mus_temp
+            else:
+                break
+        score += getScore(np.sum(pred_mus_final), np.sum(y_mus_cpu_now), np.sum(mask_now))
+    return score
+
+def getScore(size_pred, size_unsat_core, n_clause):
+    if n_clause-size_unsat_core == 0:
         return 0
-    f1_score = 2*precision*recall/(precision+recall)
-    return f1_score
+    return max((size_pred-size_unsat_core)/(n_clause-size_unsat_core), 0)
 
-
-if __name__ == "__main__":
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    mode_type = int(input("1. Normal \n2. Test \n3. Single \nMode: "))
-
-    data_train = []
-    data_test = []
-    test_type = -1
-    root_folder = "../dimacs_min/"
-
-    BATCH_SIZE = 128
-    EPOCHS = 100
-    TEST_EPOCHS = 20
-    ITERATIONS = 100
-    LOSS_WEIGHT_OFFSET = 1
-    MODEL_SAVE_EPOCHS = 10
-
-    total_positive = 0.0
-    total_negative = 0.0
-    total_always_negative_train = 0.0
-    total_always_negative_test = 0.0
-    
-    if mode_type == 1 or mode_type == 2:
-        if mode_type == 1:
-            unsat_cores_train = {}
-
-            print("Loading training data...")
-            with open('extracted_cores/unsat_cores_train.pickle', 'rb') as handle:
-                unsat_cores_train = pickle.load(handle)
-            for cnf_file in tqdm(unsat_cores_train.keys()):
-                cnf_data = unsat_cores_train[cnf_file]
-                #print(np.sum(cnf_data.unsat_core)/cnf_data.n_clause)
-
-                features, mask = cnf_data.getFeatures()
-                data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.out_graph),\
-                            y=torch.tensor(cnf_data.unsat_core), mask=torch.tensor(mask), \
-                                edge_attr = torch.tensor(cnf_data.edge_attr).float(),cnf_data=cnf_data)
-                data_train.append(data)
-
-                positive = torch.sum(data.y).item()
-                total_positive += positive
-                total_negative += cnf_data.n_clause - positive
-                total_always_negative_train += cnf_data.n_var
-            
-            train_loader = DataLoader(
-                data_train,
-                batch_size=BATCH_SIZE,
-                shuffle=True
-            )
-        else:
-            test_type = input("Test type: ")
-            model_path = "model_" + input("Model name: ")
-
-        unsat_cores_test = {}
-
-        print("Loading testing data...")
-        test_path = "unsat_cores_test.pickle"
-        if test_type >= 0:
-            test_path = "unsat_cores_satcomp(" + test_type + ").pickle"
-
-        with open('extracted_cores/' + test_path, 'rb') as handle:
-            unsat_cores_test = pickle.load(handle)
-
-        for cnf_file in tqdm(unsat_cores_test.keys()):
-            cnf_data = unsat_cores_test[cnf_file]
-
-            features, mask = cnf_data.getFeatures()
-            data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.out_graph),\
-                        y=torch.tensor(cnf_data.unsat_core), mask=torch.tensor(mask), \
-                            edge_attr = torch.tensor(cnf_data.edge_attr).float(),cnf_data=cnf_data)
-            data_test.append(data)
-            
-            positive = torch.sum(data.y).item()
-            total_positive += positive
-            total_negative += cnf_data.n_clause - positive
-            total_always_negative_test += cnf_data.n_var
-
-        test_loader = DataLoader(
-            data_test,
-            batch_size=BATCH_SIZE,
-            shuffle=False
-        )
+def isUnsat(pred, solver):
+    assump = np.argwhere(pred==1) + 1
+    if len(assump) > 1:
+        assump = np.squeeze(assump)
     else:
-        unsat_cores = {}
-        with open('extracted_cores/unsat_cores_test_single.pickle', 'rb') as handle:
-            unsat_cores = pickle.load(handle)
+        assump = assump[0]
+    return not solver.solve(assumptions=(assump).tolist())
 
+def getSolver(formula, n_var):
+    solver = Solver(name='m22', bootstrap_with=formula.hard, use_timer=True)
+    topv = n_var
+    for i, cl in enumerate(formula.soft):
+        topv += 1
 
-        cnf_data = unsat_cores['test.dimacs']
+        solver.add_clause(cl + [-topv])
+    return solver
 
-        features, mask = cnf_data.getFeatures()
-        data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.out_graph),\
-                    y=torch.tensor(cnf_data.unsat_core), mask=torch.tensor(mask), \
-                        edge_attr = torch.tensor(cnf_data.edge_attr).float(), cnf_data=cnf_data)
-        data_train.append(data)
-        data_test.append(data)
+def saveAllPlots(train_loss, train_mus_correct, train_sat_correct, train_score, test_loss, test_mus_correct, test_sat_correct, test_score, args):
+    x_axis = np.arange(0, len(test_score)) * args.test_epochs
 
-        positive = torch.sum(data.y).item()
-        total_positive += positive
-        total_negative += cnf_data.n_clause - positive
-        total_always_negative_test += cnf_data.n_var
-        total_always_negative_train += cnf_data.n_var
+    print("Plotting...")
+    plt.plot(x_axis, train_score, label="Train")
+    plt.plot(x_axis, test_score, label="Test", linestyle='dashed')
+    plt.xlabel("Epochs")
+    plt.ylabel("Score")
+    plt.legend()
 
-        train_loader = DataLoader(
-            [data],
-            batch_size=1,
-            shuffle=False
-        )
+    plt.savefig("../plots/score.png")
+    plt.clf()
 
-        test_loader = DataLoader(
-            [data],
-            batch_size=1,
-            shuffle=False
-        )
+    plt.plot(train_mus_correct, label="Train")
+    plt.plot(x_axis, test_mus_correct, label="Test", linestyle='dashed')
+    plt.xlabel("Epochs")
+    plt.ylabel("MUS")
+    plt.legend()
+
+    plt.savefig("../plots/mus.png")
+    plt.clf()
+
+    plt.plot(train_sat_correct, label="Train")
+    plt.plot(x_axis, test_sat_correct, label="Test", linestyle='dashed')
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy")
+    plt.legend()
+
+    plt.savefig("../plots/sat.png")
+    plt.clf()
+
+    plt.plot(train_loss, label="Train")
+    plt.plot(x_axis, test_loss, label="Test", linestyle='dashed')
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    plt.savefig("../plots/loss.png")
+    plt.clf()
+
+def get_args():
+    parser = argparse.ArgumentParser(description='NeuroMUSX: A GNN Based Minimal Unsatisfiable Subset Extractor')
+    parser.add_argument('-b', '--batch-size', default=64, type=int, help='Batch Size to use')
+    parser.add_argument('-e', '--epochs', default=1000, type=int, help='Number of epochs to train for')
+    parser.add_argument('-te', '--test-epochs', default=50, type=int, help='Interval of epochs for testing')
+    parser.add_argument('-ns', '--neuro-sat', default=False, type=bool, help='Uses the NeuroSAT framework for testing when true')
+    parser.add_argument('-dtest', '--dataset-test', default='../dataset/processed/test.pkl', type=str, help='Dataset to use for testing')
+    parser.add_argument('-dtrain', '--dataset-train', default='../dataset/processed/train.pkl', type=str, help='Dataset to use for training')
+    parser.add_argument('-l', '--layers', default=10, type=int, help='Number of layers to use')
+    parser.add_argument('-mse', '--model-save-epoch', default=50, type=int, help='Interval of epochs for saving model')
+    parser.add_argument('-r', '--random', default=True, type=bool, help='Set to True if dataset is random')
+    parser.add_argument('-mp', '--model-path', default='../models/final/model_random.pt', type=str, help='Path to save model to')
+    parser.add_argument('-tl', '--transfer-learning', default="", type=str, help='Path to model to use for transfer learning')
+    parser.add_argument('-pse', '--plot-save-epoch', default=50, type=int, help='Interval of epochs for saving plots')
+    return parser.parse_args()
+
+if __name__ == '__main__':
+    args = get_args()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    gnn_model = model.GNNSat_V2(iterations=ITERATIONS)
+    os.chdir("../src")
+    random.seed(1)
 
-    if mode_type == 2:
-        gnn_model.load_state_dict(torch.load("models/" + model_path + ".pt"))
-        gnn_model.to(device)
-        print("Testing sequence...")
-        gnn_model.eval()
+    with open(args.dataset_train, "rb") as f:
+        train_data = pickle.load(f)
+    with open(args.dataset_test, "rb") as f:
+        test_data = pickle.load(f)
 
-        sum_unsat_correct = 0
-        sum_correct = 0
-        conf_mat_total = np.asarray([[-total_always_negative_test,0],[0,0]])
+    if args.random:
+        train_data_unsat, train_data_sat = train_data
+        test_data_unsat, test_data_sat = test_data
+    else:
+        train_data_unsat = train_data
+        test_data_unsat = test_data
+        train_data_sat = []
+        test_data_sat = []
+    
+    train_data_loaded = []
+    test_data_loaded = []
 
-        for data in tqdm(test_loader):
-            y_cpu = data.y.to('cpu').numpy()
+    solver_instances = []
+    total_positive = 0
+    total_negative = 0
+    
+    print("Loading train data...")
 
-            y = data.y.to(device).float()
+    id = 0
+    for cnf_data in tqdm(train_data_unsat):
+        if args.neuro_sat:
+            cnf_data.setSplitLiterals(True)
+        features, mask = cnf_data.getFeatures()
+
+        data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
+                        edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
+                        y_sat=torch.tensor(cnf_data.sat).float(), id=id)
+        
+        solver_instances.append(getSolver(cnf_data.formula, cnf_data.n_vars))
+        train_data_loaded.append(data)
+        total_positive += np.sum(cnf_data.mus_bin)
+        total_negative += cnf_data.n_clauses - np.sum(cnf_data.mus_bin)
+        id += 1
+
+    for cnf_data in tqdm(train_data_sat):
+        if args.neuro_sat:
+            cnf_data.setSplitLiterals(True)
+        features, mask = cnf_data.getFeatures()
+
+        data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
+                        edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
+                        y_sat=torch.tensor(cnf_data.sat).float(), id=id)
+        
+        solver_instances.append(getSolver(cnf_data.formula, cnf_data.n_vars))
+        train_data_loaded.append(data)
+        id += 1
+
+    train_loader = DataLoader(train_data_loaded, batch_size=args.batch_size, shuffle=True)
+
+    print("Finished!")
+
+
+    print("Loading test data...")
+    for cnf_data in tqdm(test_data_unsat):
+        if args.neuro_sat:
+            cnf_data.setSplitLiterals(True)
+        features, mask = cnf_data.getFeatures()
+
+        data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
+                        edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
+                        y_sat=torch.tensor(cnf_data.sat).float(), id=id)
+        
+        solver_instances.append(getSolver(cnf_data.formula, cnf_data.n_vars))
+        test_data_loaded.append(data)
+        id += 1
+    
+    for cnf_data in tqdm(test_data_sat):
+        if args.neuro_sat:
+            cnf_data.setSplitLiterals(True)
+        features, mask = cnf_data.getFeatures()
+
+        data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
+                        edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
+                        y_sat=torch.tensor(cnf_data.sat).float(), id=id)
+        
+        solver_instances.append(getSolver(cnf_data.formula, cnf_data.n_vars))
+        test_data_loaded.append(data)
+        id += 1
+    
+    test_loader = DataLoader(test_data_loaded, batch_size=args.batch_size, shuffle=False)
+
+    print("Finished!")
+
+    print("Loading model...")
+    if args.neuro_sat:
+        model = NeuroSAT()
+        optim = torch.optim.Adam(model.parameters(), lr=0.00002)
+    else:
+        if args.transfer_learning != "":
+            model_loaded = torch.load(args.transfer_learning)
+            model = NeuroMUSX_V2(model_loaded[1])
+            model.load_state_dict(model_loaded[0])
+        else:
+            model = NeuroMUSX_V2(args.layers)
+        optim = torch.optim.Adam(model.parameters(), lr=0.00002)
+        loss_func = Loss_NeuroMUSX(torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(total_negative/total_positive)), 
+                                   torch.nn.BCEWithLogitsLoss())
+    
+    print("Finished!")
+
+    print("Training...")
+    
+
+    train_loss = []
+    train_mus_correct = []
+    train_sat_correct = []
+    train_score = []
+
+    test_loss = []
+    test_mus_correct = []
+    test_sat_correct = []
+    test_score = []
+
+    model.to(device)
+
+    for epoch in range(1, args.epochs+1):
+        #print(model.gat_init[0].lin_r.weight[0])
+        model.train()
+        sum_loss = 0
+        sum_mus_correct = 0
+        sum_sat_correct = 0
+        sum_score = 0
+
+        for data in tqdm(train_loader):
+            optim.zero_grad()
+
             data = data.to(device)
 
-            out = gnn_model(data)
+            mask = data.mask.detach().cpu().numpy()
+            batch = data.batch.detach().cpu().numpy()
+            id_cpu = data.id.detach().cpu().numpy()
 
-            pred = torch.sigmoid(out).detach().to('cpu').numpy()
-            pred = np.where(pred == 0.5, 0, pred)
-            pred = np.where(pred > 0.5, 1, 0)
+            y_mus_cpu = data.y_mus.detach().cpu().numpy()
+            y_sat_cpu = data.y_sat.detach().cpu().numpy()
 
-            sum_correct += getCorrect(data.batch.detach().to('cpu').numpy(), pred, y_cpu)
-            sum_unsat_correct += getCorrectUnsat(data.batch.detach().to('cpu').numpy(), pred, data)
-            conf_mat_total += confusion_matrix(y_cpu, pred)
+            out = model(data, batch)
+            
+            pred_mus = torch.sigmoid(out[0]).detach().cpu().numpy() * mask
+            pred_sat = torch.sigmoid(out[1]).detach().cpu().numpy()
+            pred_sat = np.round(pred_sat)
 
-        f1_score = getF1Score(conf_mat_total)
-        print("   Test Correct: ", sum_correct)
-        print("   Test Unsat Correct: ", sum_unsat_correct)
-        
-        print("   Confusion Matrix:\n")
-        print("    ", "%8d %8d" % (int(conf_mat_total[0][0]), int(conf_mat_total[0][1])))
-        print("    ", "%8d %8d" % (int(conf_mat_total[1][0]), int(conf_mat_total[1][1])))
-        print("   F1 Score:", f1_score)
-
-    else:
-        optim = torch.optim.Adam(gnn_model.parameters())
-        lossfunc = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(total_negative/total_positive)*LOSS_WEIGHT_OFFSET)
-
-        test_f = []
-        test_correct = []
-        test_unsat_correct = []
-        test_loss = []
-
-        train_f = []
-        train_correct = []
-        train_unsat_correct = []
-        train_loss = []
-
-        gnn_model.to(device)
-
-        print("Starting training sequence...")
-        for epoch in range(1, EPOCHS+1):
-            # Train
-            gnn_model.train()
-
-            sum_loss = 0
-            sum_correct = 0
-            sum_unsat_correct = 0
-            conf_mat_total = np.asarray([[-total_always_negative_train,0],[0,0]])
-
-            for data in tqdm(train_loader):
-                optim.zero_grad()
-                
-                y_cpu = data.y.to('cpu').numpy()
-
-                y = data.y.to(device).float()
-                data = data.to(device)
-
-                out = gnn_model(data)
-                loss = lossfunc(out, y)
-
+            if args.neuro_sat:
+                continue
+            else:
+                loss = loss_func(out[0], data.y_mus, out[1], data.y_sat, batch, mask)
                 sum_loss += float(loss)
-
                 loss.backward()
                 optim.step()
 
-                pred = torch.sigmoid(out).detach().to('cpu').numpy()
-                pred = np.where(pred == 0.5, 0, pred)
-                pred = np.where(pred > 0.5, 1, 0)
+            sum_mus_correct += (np.sum(mask) - np.count_nonzero(np.round(pred_mus) - y_mus_cpu))/np.sum(mask)*len(data)
+            sum_sat_correct += len(data) - np.count_nonzero(pred_sat - y_sat_cpu)
+            if epoch % args.test_epochs == 0:
+                sum_score += getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id_cpu, solver_instances, mask)
+        sum_sat_correct /= len(train_data_loaded)
+        sum_score /= len(train_data_loaded)
+        if args.random:
+            sum_score *= 2
+        sum_mus_correct /= len(train_data_loaded)
+        sum_loss /= len(train_data_loaded)
 
-                sum_correct += getCorrect(data.batch.detach().to('cpu').numpy(), pred, y_cpu)
-                if epoch % TEST_EPOCHS == 0:
-                    sum_unsat_correct += getCorrectUnsat(data.batch.detach().to('cpu').numpy(), pred, data)
-                conf_mat_total += confusion_matrix(y_cpu, pred)
+        train_loss.append(sum_loss)
+        train_mus_correct.append(sum_mus_correct)
+        train_sat_correct.append(sum_sat_correct)
 
-            sum_loss /= len(data_train)
-            f1_score = getF1Score(conf_mat_total)
-            print("\n\nEpoch:", epoch)
-            print("   Train Loss: ", sum_loss )
-            print("   Train Fully Correct: ", sum_correct)
-            if epoch % TEST_EPOCHS == 0:
-                print("   Train Unsat Correct: ", sum_unsat_correct)
-            print("   Confusion Matrix:")
-            print("    ", "%8d %8d" % (int(conf_mat_total[0][0]), int(conf_mat_total[0][1])))
-            print("    ", "%8d %8d" % (int(conf_mat_total[1][0]), int(conf_mat_total[1][1])))
-            print("   F1 Score:", f1_score)
-            print("\n")
-
-            train_f.append(f1_score)
-            train_correct.append(sum_correct)
-            train_loss.append(sum_loss)
-            if epoch % TEST_EPOCHS == 0:
-                train_unsat_correct.append(sum_unsat_correct)
-
-
-            # Testing
-            if epoch % TEST_EPOCHS == 0:
-                print("Testing sequence...")
-                gnn_model.eval()
-
-                sum_unsat_correct = 0
-                sum_correct = 0
+        if epoch % args.test_epochs == 0:
+            sum_loss /= len(train_data_loaded)
+            train_score.append(sum_score)
+        
+        print("Epoch: {} Loss: {} MUS: {} SAT: {} Score: {}".format(epoch, sum_loss, sum_mus_correct, sum_sat_correct, sum_score))
+        if epoch % args.model_save_epoch == 0:
+            torch.save([model.state_dict(), model.iterations], "../models/per_epoch/model_{}.pt".format(epoch))
+        if epoch % args.test_epochs == 0:
+            model.eval()
+            with torch.no_grad():
                 sum_loss = 0
-                conf_mat_total = np.asarray([[-total_always_negative_test,0],[0,0]])
+                sum_mus_correct = 0
+                sum_sat_correct = 0
+                sum_score = 0
 
                 for data in tqdm(test_loader):
-                    y_cpu = data.y.to('cpu').numpy()
-
-                    y = data.y.to(device).float()
                     data = data.to(device)
 
-                    out = gnn_model(data)
-                    loss = lossfunc(out, y)
+                    mask = data.mask.detach().cpu().numpy()
+                    batch = data.batch.detach().cpu().numpy()
+                    id_cpu = data.id.detach().cpu().numpy()
 
-                    sum_loss += float(loss)
+                    y_mus_cpu = data.y_mus.detach().cpu().numpy()
+                    y_sat_cpu = data.y_sat.detach().cpu().numpy()
 
-                    pred = torch.sigmoid(out).detach().to('cpu').numpy()
-                    pred = np.where(pred == 0.5, 0, pred)
-                    pred = np.where(pred > 0.5, 1, 0)
+                    out = model(data, batch)
+                    
+                    pred_mus = torch.sigmoid(out[0]).detach().cpu().numpy() * mask
+                    pred_sat = torch.sigmoid(out[1]).detach().cpu().numpy()
+                    pred_sat = np.round(pred_sat)
 
-                    sum_correct += getCorrect(data.batch.detach().to('cpu').numpy(), pred, y_cpu)
-                    sum_unsat_correct += getCorrectUnsat(data.batch.detach().to('cpu').numpy(), pred, data)
-                    conf_mat_total += confusion_matrix(y_cpu, pred)
+                    if args.neuro_sat:
+                        continue
+                    else:
+                        loss = loss_func(out[0], data.y_mus, out[1], data.y_sat, batch, mask)
+                        sum_loss += float(loss)
 
-                sum_loss /= len(data_train)
-                f1_score = getF1Score(conf_mat_total)
-                print("\n\n   Test Loss: ", sum_loss )
-                print("   Test Correct: ", sum_correct)
-                print("   Test Unsat Correct: ", sum_unsat_correct)
-                
-                print("   Confusion Matrix:\n")
-                print("    ", "%8d %8d" % (int(conf_mat_total[0][0]), int(conf_mat_total[0][1])))
-                print("    ", "%8d %8d" % (int(conf_mat_total[1][0]), int(conf_mat_total[1][1])))
-                print("   F1 Score:", f1_score)
-                print("\n")
-                
-                test_f.append(f1_score)
-                test_correct.append(sum_correct)
-                test_unsat_correct.append(sum_unsat_correct)
+                    sum_mus_correct += (np.sum(mask) - np.count_nonzero(np.round(pred_mus) - y_mus_cpu))/np.sum(mask)*len(data)
+                    sum_sat_correct += len(data) - np.count_nonzero(pred_sat - y_sat_cpu)
+                    sum_score += getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id_cpu, solver_instances, mask)
+
+                sum_sat_correct /= len(test_data_loaded)
+                sum_score /= len(test_data_loaded)
+                if args.random:
+                    sum_score *= 2
+                sum_loss /= len(test_data_loaded)
+                sum_mus_correct /= len(test_data_loaded)
+
                 test_loss.append(sum_loss)
+                test_mus_correct.append(sum_mus_correct)
+                test_sat_correct.append(sum_sat_correct)
+                test_score.append(sum_score)
+                if epoch == args.test_epochs:
+                    test_loss.append(sum_loss)
+                    test_mus_correct.append(sum_mus_correct)
+                    test_sat_correct.append(sum_sat_correct)
+                    test_score.append(sum_score)
+                    train_score.append(train_score[0])
 
-                #if sum_acc > 0.7 and sum_acc < 0.75:
-                #    break
-            if epoch % MODEL_SAVE_EPOCHS == 0:
-                torch.save(gnn_model.state_dict(), "models/model_" + str(epoch) + ".pt")
+                print("Test Loss: {} MUS: {} SAT: {} Score: {}".format(sum_loss, sum_mus_correct, sum_sat_correct, sum_score))
         
+        if epoch % args.plot_save_epoch == 0 and epoch >= args.test_epochs:
+            saveAllPlots(train_loss, train_mus_correct, train_sat_correct, train_score, test_loss, test_mus_correct, test_sat_correct, test_score, args)
 
-        gnn_model.eval()
-        final_test = Batch.from_data_list([data_train[0]])
-
-        y_cpu = final_test.y.to('cpu').numpy()
-        data = final_test.to(device)
-
-        out = gnn_model(data, print_data=True)
-
-        pred = torch.sigmoid(out).detach().to('cpu').numpy()
-        print(pred)
-        pred = np.where(pred > 0.5, 1, 0)
-
-        y_cpu = y_cpu.astype(pred.dtype)
-
-        print(np.count_nonzero(pred), np.count_nonzero(pred - 1))
-        print(pred[-100:])
-        print(final_test.mask.detach().to('cpu').numpy().astype(pred.dtype)[-100:])
-        print(y_cpu[-100:])
-
-
-        if TEST_EPOCHS > 1:
-            test_f.insert(0, test_f[0])
-            test_correct.insert(0, test_correct[0])
-            test_unsat_correct.insert(0, test_unsat_correct[0])
-            train_unsat_correct.insert(0, train_unsat_correct[0])
-            test_loss.insert(0, test_loss[0])
-
-        x_axis = np.arange(0, len(test_f)) * TEST_EPOCHS
-
-
-        plt.plot(train_f, label="Train F1 Score")
-        plt.plot(x_axis, test_f, label="Test F1 Score (" + str(TEST_EPOCHS) + " epochs)", linestyle='dashed')
-        plt.xlabel("Epochs")
-        plt.ylabel("F1 Score")
-        plt.legend()
-
-        # Save plot
-        plt.savefig("output_images/plot_f1.png")
-
-        plt.clf()
-
-        plt.plot(train_correct, label="Train Fully Correct")
-        plt.plot(x_axis, test_correct, label="Test Fully Correct (" + str(TEST_EPOCHS) + " epochs)", linestyle='dashed')
-        plt.xlabel("Epochs")
-        plt.ylabel("Correct")
-        plt.legend()
-
-        # Save plot
-        plt.savefig("output_images/plot_correct.png")
-
-        plt.clf()
-
-        plt.plot(train_loss, label="Train Loss")
-        plt.plot(x_axis, test_loss, label="Test Loss (" + str(TEST_EPOCHS) + " epochs)", linestyle='dashed')
-        plt.xlabel("Epochs")
-        plt.ylabel("Loss")
-        plt.legend()
-
-        # Save plot
-        plt.savefig("output_images/plot_loss.png")
-
-        plt.clf()
-
-        plt.plot(x_axis, train_unsat_correct, label="Train Unsat Correct")
-        plt.plot(x_axis, test_unsat_correct, label="Test Unsat Correct", linestyle='dashed')
-        plt.xlabel("Epochs")
-        plt.ylabel("Unsat Correct")
-        plt.legend()
-
-        # Save plot
-        plt.savefig("output_images/plot_unsat_correct.png")
-
-        plt.clf()
-
-
-        seaborn.heatmap(conf_mat_total, annot=True, cmap='Blues')
-        plt.xlabel("Predicted")
-        plt.ylabel("Ground Truth")
-        plt.savefig('output_images/conf_mat.png')
+    print("Finished!")
+    torch.save([model.state_dict(), model.iterations], args.model_path)
+    saveAllPlots(train_loss, train_mus_correct, train_sat_correct, train_score, test_loss, test_mus_correct, test_sat_correct, test_score, args)
+    

@@ -103,12 +103,7 @@ from pysat.formula import CNFPlus, WCNFPlus
 from pysat.solvers import Solver, SolverNames
 import re
 import sys
-from tester import Tester
-import model
-from CNF_Data import CNF_Data
-import numpy as np
-import time
-import copy
+
 
 #
 #==============================================================================
@@ -141,8 +136,6 @@ class MUSX(object):
         """
 
         topv, self.verbose = formula.nv, verbosity
-        self.org_topv = formula.nv
-        self.clause_amt = len(formula.soft)
 
         # clause selectors and a mapping from selectors to clause ids
         self.sels, self.vmap = [], {}
@@ -189,11 +182,9 @@ class MUSX(object):
 
         if self.oracle:
             self.oracle.delete()
-            self.oracle2.delete()
             self.oracle = None
-            self.oracle2 = None
 
-    def compute(self, pred_org=None, only_pred=False):
+    def compute(self, timeout=1000):
         """
             This is the main method of the :class:`MUSX` class. It computes a
             set of soft clauses belonging to an MUS of the input formula.
@@ -204,88 +195,20 @@ class MUSX(object):
         """
 
         # cheking whether or not the formula is unsatisfiable
-        #print("Coefficient:", coeff)
-        #print(self.sels)
-        #print(pred)
-        #print("Starting compute")
-        thres = -0.01
-        next_assump = self.getList(thres, pred_org)
-        approx = None
-        smallest_approx = None
-        changed = 0
+        if not self.oracle.solve(assumptions=self.sels):
+            # get an overapproximation of an MUS
+            approx = sorted(self.oracle.get_core())
 
-        while not self.oracle.solve(assumptions=next_assump):
+            if self.verbose:
+                print('c MUS approx:', ' '.join([str(self.vmap[sel] + 1) for sel in approx]), '0')
 
-            approx_temp = self.oracle.get_core()
-            #if approx and len(approx_temp) > len(approx):
-            #    print("Stopped update:", len(approx_temp))
-            #    break
+            # iterate over clauses in the approximation and try to delete them
+            mus = self._compute(approx, timeout=timeout)
 
-            approx = approx_temp
-            if not smallest_approx is None and len(approx) > len(smallest_approx)*4.8:
-                print("Exitting due to size")
-                break
-            if not smallest_approx or len(approx) <= len(smallest_approx):
-                smallest_approx = approx
-                changed += 1
+            # return an MUS
+            return list(map(lambda x: self.vmap[x] + 1, mus))
 
-            print("Prediction update:", len(self.getList(thres, pred_org)), len(approx), thres)
-
-            #print(self.oracle_time())
-            if self.oracle_time() > 10:
-                print("Exitting due to time")
-                break
-
-            thres = self.getSmallest(approx, pred_org)
-            next_assump = self.getList(thres, pred_org)
-
-        print(len(self.getList(thres, pred_org)))
-        print("Theshold:", (thres))
-        # Get numpy array corresponding to approx and sort by probability
-        #print(approx)
-        #self.oracle.solve(assumptions=self.sels)
-        #smallest_approx = self.oracle.get_core()
-        print("Size of Smallest Approximation:", len(smallest_approx))
-        
-        if self.verbose:
-            print('c MUS approx:', ' '.join([str(self.vmap[sel] + 1) for sel in approx]), '0')
-            
-        print("Changed:", changed)
-        if only_pred and changed < 2:
-            print("Exitting due to no change")
-            exit()
-        #exit()
-        self.deletion_start = self.oracle_time()
-        # iterate over clauses in the approximation and try to delete them
-        mus = self._compute(sorted(smallest_approx))
-
-        self.deletion_fin = self.oracle_time()
-
-        # return an MUS
-        return list(map(lambda x: self.vmap[x] + 1, mus))
-    
-    def isContained(self, assump, approx):
-        for var in approx:
-            if not var in assump:
-                return False
-        return True
-
-    def getList(self, threshold, pred):
-        pred = np.where(pred > threshold, 1, 0)
-        pred = np.argwhere(pred == 1).flatten() + 1
-        return pred.tolist()
-
-    def getSmallest(self, approx, pred):
-        smallest = 1
-        for var in approx:
-            if pred[var-1] < smallest:
-                smallest = pred[var-1]
-        return smallest
-
-    def getMUSTime(self):
-        return self.deletion_fin - self.deletion_start
-
-    def _compute(self, approx):
+    def _compute(self, approx, timeout=1000):
         """
             Deletion-based MUS extraction. Given an over-approximation of an
             MUS, i.e. an unsatisfiable core previously returned by a SAT
@@ -314,17 +237,16 @@ class MUSX(object):
         """
 
         i = 0
-        total = 0
-        while i < len(approx): # Add sorting mechanism
-            to_test = approx[:i] + approx[(i + 1):] # Removes 0, 1, 2 and so on
+
+        while i < len(approx):
+            if i % 10 == 0 and self.oracle_time() > timeout:
+                print("c Timeout limit exceeded")
+                break
+            to_test = approx[:i] + approx[(i + 1):]
             sel, clid = approx[i], self.vmap[approx[i]]
-            total += len(to_test)
 
             if self.verbose > 1:
-                #print('c', approx[:i], approx[(i + 1):])
                 print('c testing clid: {0}'.format(clid), end='')
-
-                print('c Test size:', len(to_test))
 
             if self.oracle.solve(assumptions=to_test):
                 if self.verbose > 1:
@@ -336,35 +258,7 @@ class MUSX(object):
                     print(' -> unsat (removing {0})'.format(clid))
 
                 approx = to_test
-        #print(total)
-        return approx
 
-
-    def _compute_gnn(self, approx, approx_gnn):
-
-        total = 0
-        for i_index in range(len(approx_gnn)): # Add sorting mechanism
-            i = approx.index(approx_gnn[i_index])
-
-            to_test = approx[:i] + approx[(i + 1):] # Removes 0, 1, 2 and so on
-            sel, clid = approx[i], self.vmap[approx[i]]
-            total += len(to_test)
-
-            if self.verbose > 1:
-                #print('c', approx[:i], approx[(i + 1):])
-                print('c testing clid: {0}'.format(clid), end='')
-                print('c Test size:', len(to_test))
-
-            if self.oracle.solve(assumptions=to_test):
-                if self.verbose > 1:
-                    print(' -> sat (keeping {0})'.format(clid))
-            else:
-                if self.verbose > 1:
-                    print(' -> unsat (removing {0})'.format(clid))
-
-                approx = to_test
-            
-        #print(total)
         return approx
 
     def oracle_time(self):
@@ -383,7 +277,7 @@ def parse_options():
         """
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hs:v', ['help', 'solver=', 'verbose', 'gnn'])
+        opts, args = getopt.getopt(sys.argv[2:], 'hs:v', ['help', 'solver=', 'verbose'])
     except getopt.GetoptError as err:
         sys.stderr.write(str(err).capitalize())
         usage()
@@ -391,7 +285,6 @@ def parse_options():
 
     solver = 'm22'
     verbose = 0
-    gnn = False
 
     for opt, arg in opts:
         if opt in ('-h', '--help'):
@@ -401,12 +294,10 @@ def parse_options():
             solver = str(arg)
         elif opt in ('-v', '--verbose'):
             verbose += 1
-        elif opt in('--gnn'):
-            gnn = True
         else:
             assert False, 'Unhandled option: {0} {1}'.format(opt, arg)
 
-    return solver, verbose, args, gnn
+    return solver, verbose, args
 
 
 #
@@ -427,68 +318,22 @@ def usage():
 #
 #==============================================================================
 if __name__ == '__main__':
-    solver, verbose, files, gnn = parse_options()
-    only_pred = "-timeout" in files[0]
-    if only_pred:
-        print("TIMEOUT MODE ON")
-    #tester = Tester('models_archive/model_3-40_satv2-3.pt', model.GNNSat_V2_3)
-    if False:
-        tester = Tester('models/model_1000.pt', model.GNNSat_V2_3)
-        print("For withbit")
-    elif "abstraction" in files[0]:
-        tester = Tester('models_archive/model_ab3.pt', model.GNNSat_V2_3)
-        #tester = Tester('models/model_100.pt', model.GNNSat_V2_3)
-        print("For abstraction")
-    elif "design" in files[0]:
-        tester = Tester('models_archive/model_dd4.pt', model.GNNSat_V2_3)
-        #tester = Tester('models/model_100.pt', model.GNNSat_V2_3)
-        print("For design")
-    elif "hardware" in files[0]:
-        tester = Tester('models_archive/model_hv11.pt', model.GNNSat_V2_3)
-        #tester = Tester('models/model_100.pt', model.GNNSat_V2_3)
-        print("For hardware")
-    elif "fdmus" in files[0]:
-        #tester = Tester('models/model_100.pt', model.GNNSat_V2_3)
-        tester = Tester('models_archive/model_fd2.pt', model.GNNSat_V2_3)
-        print("For fd2")
-    elif "application" in files[0]:
-        tester = Tester('models_archive/model_app3.pt', model.GNNSat_V2_3)
-        #tester = Tester('models/model_100.pt', model.GNNSat_V2_3)
-        print("For application")
-    else:
-        tester = Tester('models_archive/model_withbit-7.pt', model.GNNSat_V2_3)
-
+    solver, verbose, files = parse_options()
 
     if files:
         # parsing the input formula
-        print("CNF File: ", files[0])
         if re.search('\.wcnf[p|+]?(\.(gz|bz2|lzma|xz))?$', files[0]):
             formula = WCNFPlus(from_file=files[0])
         else:  # expecting '*.cnf[,p,+].*'
             formula = CNFPlus(from_file=files[0]).weighted()
-        print("Finished making CNF Module")
-        cnf_data = CNF_Data(files[0], 'test_file')
-        print("Finished making CNF Data")
 
         with MUSX(formula, solver=solver, verbosity=verbose) as musx:
-            if gnn:
-                if False:
-                    temp = tester.test(cnf_data, cluster_coeff=True)
-                    mus = musx.compute(prob_arr=temp[0], coeff=temp[1]*2)
-                else:
-                    gnn_pred = tester.test(cnf_data, cluster_coeff=False, round=True)
-                    print("Finished GNN pred")
-                    del tester, cnf_data
-                    mus = musx.compute(pred_org=gnn_pred[0], only_pred=only_pred)
-            else:
-                mus = musx.compute(None)
+            mus = musx.compute()
 
             if mus:
                 if verbose:
                     print('c nof soft: {0}'.format(len(formula.soft)))
                     print('c MUS size: {0}'.format(len(mus)))
 
-                #print('v', ' '.join([str(clid) for clid in mus]), '0')
-                print('c deletion time: {0:.4f}'.format(musx.getMUSTime()))
+                print('v', ' '.join([str(clid) for clid in mus]), '0')
                 print('c oracle time: {0:.4f}'.format(musx.oracle_time()))
-                print('c MUS size: {0}'.format(len(mus)), '\n')
