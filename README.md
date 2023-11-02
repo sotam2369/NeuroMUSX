@@ -5,7 +5,7 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUSes) are unsat
 
 # Main framework of our Algorithm
 <p align="center">
-  <img src="imgs/proposal.png">
+  <img src="imgs/proposal_edited.png">
 </p>
 ​
 
