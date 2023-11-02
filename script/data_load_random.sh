@@ -1,4 +1,3 @@
-rm -rf ../dataset/processed/
 mkdir -p ../dataset/processed/
 
 for ty in "train" "test" ; do

@@ -25,28 +25,42 @@ if __name__ == "__main__":
 
     output_list_unsat = []
     output_list_sat = []
+    amt = 0
+    split = 20
+    listdir = os.listdir(args.directory)
+    listdir_split = int(len(listdir) / split)
+    print(listdir_split)
 
-    for cnf_file in tqdm(os.listdir(args.directory)):
-        if args.random and "sat=1" in cnf_file:
-            cnf_data = CNFData(cnf_file, args.directory, sat=1)
-            cnf_data.mus_bin = np.zeros(cnf_data.n_vars + cnf_data.n_clauses)
-            output_list_sat.append(cnf_data)
-            continue
+    for i in range(split):
+        for cnf_file in tqdm(listdir[i*listdir_split:(i+1)*listdir_split]):
+            if args.random and "sat=1" in cnf_file:
+                cnf_data = CNFData(cnf_file, args.directory, sat=1)
+                cnf_data.mus_bin = np.zeros(cnf_data.n_vars + cnf_data.n_clauses)
+                output_list_sat.append(cnf_data)
+                continue
 
-        cnf_data = CNFData(cnf_file, args.directory, sat=0)
+            cnf_data = CNFData(cnf_file, args.directory, sat=0)
+            cnf_data.loadForqes()
 
-        signal.signal(signal.SIGALRM, raiseException)
-        signal.alarm(args.timeout_optimal)
 
-        try:
-            cnf_data.loadMUS()
-        except:
-            cnf_data.loadMUS("musx")
+            signal.signal(signal.SIGALRM, cnf_data.s.killProcess)
+            signal.alarm(args.timeout_optimal)
 
-        output_list_unsat.append(cnf_data)
-    
-    with open(args.output, "wb") as f:
-        if args.random:
-            pickle.dump([output_list_unsat, output_list_sat], f)
-        else:
-            pickle.dump(output_list_unsat, f)
+            try:
+                cnf_data.loadMUS()
+            except:
+                cnf_data.loadMUS("musx")
+
+            signal.alarm(0)
+            cnf_data.deleteForqes()
+            output_list_unsat.append(cnf_data)
+
+        with open(args.output + ".part{}".format(i+1), "wb") as f:
+            print("Saving...{0}/{1}".format(i+1, split))
+            if args.random:
+                pickle.dump([output_list_unsat, output_list_sat], f)
+            else:
+                pickle.dump(output_list_unsat, f)
+            print("Saved")
+        output_list_unsat = []
+        output_list_sat = []

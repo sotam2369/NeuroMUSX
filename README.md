@@ -1,22 +1,17 @@
 # Abstract
-In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatisfiable subsets of constraints that serve as explanations for the unsatisfiability which, as a result, have been used in various applications. Although various systematic algorithms for the extraction of MUSes have been proposed, few heuristic methods have been studied, as the process of designing efficient heuristics requires extensive experience and expertise. In this research, we propose a trainable heuristic based on Graph Neural Networks (GNNs). We design a new network structure along with loss functions and learning strategies specifically tuned to learn the process of MUS extraction, which we implement in a model called NeuroMUSX. Furthermore, we introduce a new algorithm that uses NeuroMUSX as a heuristic and combines it with other systematic search methods to make the extraction process more efficient. We conduct experiments to compare our proposed method with existing methods on the MUS Track of the 2011 SAT Competition. Our proposed algorithm is shown to achieve significantly better performance across a wide range of problem instances. In addition, training NeuroMUSX on specific instances of a class improves the algorithm's performance against other problems in the same class, highlighting the advantages of the learnable approach. Overall, these results underscore the potential of using simple GNN architectures to drastically improve the procedures for extracting minimal subsets.
+In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUSes) are unsatisfiable subsets of constraints that serve as explanations for the unsatisfiability which, as a result, have been used in various applications. Although various systematic algorithms for the extraction of MUSes have been proposed, few heuristic methods have been studied, as the process of designing efficient heuristics requires extensive experience and expertise. In this research, we propose the first trainable heuristic based on Graph Neural Networks (GNNs). We design a new network structure along with loss functions and learning strategies specifically tuned to learn the process of MUS extraction, which we implement in a model called GNN-MUS. Furthermore, we introduce a new algorithm called NeuroMUSX that uses GNN-MUS as a heuristic and combines it with other systematic search methods to make the extraction process more efficient. We conduct experiments to compare our proposed method with existing methods on the MUS Track of the 2011 SAT Competition. From the results, NeuroMUSX is shown to achieve significantly better performance across a wide range of problem instances. In addition, training NeuroMUSX on specific instances of a class improves the algorithm's performance against other problems in the same class, highlighting the advantages of the learnable approach. Overall, these results underscore the potential of using simple GNN architectures to drastically improve the procedures for extracting minimal subsets.
 ​
 <br><br><br>
 
 # Main framework of our Algorithm
 <p align="center">
-  <img src="imgs/proposal_edit.png">
+  <img src="imgs/proposal.png">
 </p>
 ​
 
 # Main Results
 ### Improving deletion-based algorithms using NeuroMUSX as a heuristic (Randomly trained)
 > Comparison with instances from SAT Competition 2011 MUS Track
-​
-
-<p align="center">
-  <img src="imgs/table1.png", width=60%>
-</p>
 
 
 <p float="left" align="center">
@@ -31,7 +26,7 @@ In Boolean Satisfiability (SAT), Minimal Unsatisfiable Subsets (MUS) are unsatis
 > Comparison with the problem sets that took the most time with Algorithm 1
 
 <p align="center">
-  <img src="imgs/table2.png", width=60%>
+  <img src="imgs/table.png", width=60%>
 </p>
 ​
 

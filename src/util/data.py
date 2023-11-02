@@ -10,11 +10,11 @@ from util.solver_wrapper import Forqes
 
 class CNFData():
 
-    def __init__(self, file_name, file_dir, edge_features=[[[1,0], [1,0]], [[0,1], [0,1]]], literal_features=[[1,0], [0,1]], split_literals=False, sat=0):
+    def __init__(self, file_name, file_dir, edge_features=[[[1,0], [-1,0]], [[0,1], [0,-1]]], node_features=[[1,0], [0,1]], split_literals=False, sat=0):
         self.file_name = file_name
         self.file_dir = file_dir
         self.edge_features = edge_features
-        self.literal_features = literal_features
+        self.node_features = node_features
         self.formula = None
         self.split_literals = split_literals
         self.sat = sat
@@ -54,16 +54,30 @@ class CNFData():
         self.edge_index = np.transpose(np.asarray(edge_index))
         self.edge_attr = np.asarray(edge_attr)
 
+    def loadForqes(self):
+        self.s = Forqes()
     
-    def getFeatures(self):
+    def deleteForqes(self):
+        self.s.killProcess(None, None)
+        del self.s
+    
+    def getFeatures(self, check_positive=True):
         if self.split_literals:
             mask = np.concatenate((np.zeros(self.n_vars*2), np.ones(self.n_clauses)))
-            lit_features = np.asarray([self.literal_features[0]]*(self.n_vars*2))
+            lit_features = np.asarray([self.node_features[0]]*(self.n_vars*2))
         else:
             mask = np.concatenate((np.zeros(self.n_vars), np.ones(self.n_clauses)))
-            lit_features = np.asarray([self.literal_features[0]]*(self.n_vars))
+            lit_features = np.asarray([self.node_features[0]]*(self.n_vars))
 
-        clause_features = np.asarray([self.literal_features[1]]*self.n_clauses)
+        if not check_positive:
+            clause_features = np.asarray([self.node_features[1]]*self.n_clauses)
+        else:
+            clause_features = []
+            for row in self.formula.soft:
+                if max(row) > 0:
+                    clause_features.append(self.node_features[1])
+                else:
+                    clause_features.append([-x for x in self.node_features[1]])
         
         return np.concatenate((lit_features, clause_features)), mask
 
@@ -73,8 +87,7 @@ class CNFData():
 
     def loadMUS(self, mode="forqes"):
         if mode == "forqes":
-            s = Forqes()
-            mus = s.solve(self, np.ones(self.n_clauses))
+            mus = self.s.solve(self, np.ones(self.n_clauses))
         elif mode == "optux":
             with OptUx(self.formula) as optux:
                 mus = optux.compute()

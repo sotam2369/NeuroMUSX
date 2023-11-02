@@ -12,7 +12,7 @@ from torch_geometric.loader import DataLoader
 import torch_geometric.transforms as T
 from pysat.solvers import Solver
 
-from models import NeuroMUSX, NeuroSAT, NeuroMUSX_V2
+from models import NeuroMUSX, NeuroSAT, NeuroMUSX_V2, NeuroMUSX_V3
 from loss import Loss_NeuroMUSX
 import matplotlib.pyplot as plt
 
@@ -73,17 +73,18 @@ def saveAllPlots(train_loss, train_mus_correct, train_sat_correct, train_score, 
     plt.ylabel("Score")
     plt.legend()
 
-    plt.savefig("../plots/score.png")
+    plt.savefig(args.plot_save_dir + "score.png")
     plt.clf()
 
-    plt.plot(train_mus_correct, label="Train")
-    plt.plot(x_axis, test_mus_correct, label="Test", linestyle='dashed')
-    plt.xlabel("Epochs")
-    plt.ylabel("MUS")
-    plt.legend()
+    if not args.neuro_sat:
+        plt.plot(train_mus_correct, label="Train")
+        plt.plot(x_axis, test_mus_correct, label="Test", linestyle='dashed')
+        plt.xlabel("Epochs")
+        plt.ylabel("MUS")
+        plt.legend()
 
-    plt.savefig("../plots/mus.png")
-    plt.clf()
+        plt.savefig(args.plot_save_dir + "mus.png")
+        plt.clf()
 
     plt.plot(train_sat_correct, label="Train")
     plt.plot(x_axis, test_sat_correct, label="Test", linestyle='dashed')
@@ -91,7 +92,7 @@ def saveAllPlots(train_loss, train_mus_correct, train_sat_correct, train_score, 
     plt.ylabel("Accuracy")
     plt.legend()
 
-    plt.savefig("../plots/sat.png")
+    plt.savefig(args.plot_save_dir + "sat.png")
     plt.clf()
 
     plt.plot(train_loss, label="Train")
@@ -100,23 +101,30 @@ def saveAllPlots(train_loss, train_mus_correct, train_sat_correct, train_score, 
     plt.ylabel("Loss")
     plt.legend()
 
-    plt.savefig("../plots/loss.png")
+    plt.savefig(args.plot_save_dir + "loss.png")
     plt.clf()
+
+    with open(args.plot_save_dir + "raw_train_data.pkl", "wb") as f:
+        pickle.dump([train_loss, train_mus_correct, train_sat_correct, train_score], f)
+    
+    with open(args.plot_save_dir + "raw_test_data.pkl", "wb") as f:
+        pickle.dump([test_loss, test_mus_correct, test_sat_correct, test_score], f)
 
 def get_args():
     parser = argparse.ArgumentParser(description='NeuroMUSX: A GNN Based Minimal Unsatisfiable Subset Extractor')
     parser.add_argument('-b', '--batch-size', default=64, type=int, help='Batch Size to use')
     parser.add_argument('-e', '--epochs', default=1000, type=int, help='Number of epochs to train for')
     parser.add_argument('-te', '--test-epochs', default=50, type=int, help='Interval of epochs for testing')
-    parser.add_argument('-ns', '--neuro-sat', default=False, type=bool, help='Uses the NeuroSAT framework for testing when true')
-    parser.add_argument('-dtest', '--dataset-test', default='../dataset/processed/test.pkl', type=str, help='Dataset to use for testing')
-    parser.add_argument('-dtrain', '--dataset-train', default='../dataset/processed/train.pkl', type=str, help='Dataset to use for training')
+    parser.add_argument('-ns', '--neuro-sat', default=False, action='store_true', help='Uses the NeuroSAT framework for testing when true')
+    parser.add_argument('-dtest', '--dataset-test', default='../dataset/processed/test_3.pkl', type=str, help='Dataset to use for testing')
+    parser.add_argument('-dtrain', '--dataset-train', default='../dataset/processed/train_3.pkl', type=str, help='Dataset to use for training')
     parser.add_argument('-l', '--layers', default=10, type=int, help='Number of layers to use')
     parser.add_argument('-mse', '--model-save-epoch', default=50, type=int, help='Interval of epochs for saving model')
     parser.add_argument('-r', '--random', default=True, type=bool, help='Set to True if dataset is random')
     parser.add_argument('-mp', '--model-path', default='../models/final/model_random.pt', type=str, help='Path to save model to')
     parser.add_argument('-tl', '--transfer-learning', default="", type=str, help='Path to model to use for transfer learning')
     parser.add_argument('-pse', '--plot-save-epoch', default=50, type=int, help='Interval of epochs for saving plots')
+    parser.add_argument('-psd', '--plot-save-dir', default='../plots/', type=str, help='Directory to save plots to')
     return parser.parse_args()
 
 if __name__ == '__main__':
@@ -124,6 +132,8 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     os.chdir("../src")
+    if not os.path.exists(args.plot_save_dir):
+        os.makedirs(args.plot_save_dir)
     random.seed(1)
 
     with open(args.dataset_train, "rb") as f:
@@ -151,9 +161,12 @@ if __name__ == '__main__':
 
     id = 0
     for cnf_data in tqdm(train_data_unsat):
+        cnf_data.edge_features = [[[1,0], [-1,0]], [[0,1], [0,-1]]]
         if args.neuro_sat:
             cnf_data.setSplitLiterals(True)
-        features, mask = cnf_data.getFeatures()
+        else:
+            cnf_data.setSplitLiterals(False)
+        features, mask = cnf_data.getFeatures(check_positive=(not args.neuro_sat))
 
         data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
                         edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
@@ -164,11 +177,16 @@ if __name__ == '__main__':
         total_positive += np.sum(cnf_data.mus_bin)
         total_negative += cnf_data.n_clauses - np.sum(cnf_data.mus_bin)
         id += 1
+        #if id % 50000 == 0:
+        #    break
 
     for cnf_data in tqdm(train_data_sat):
+        cnf_data.edge_features = [[[1,0], [-1,0]], [[0,1], [0,-1]]]
         if args.neuro_sat:
             cnf_data.setSplitLiterals(True)
-        features, mask = cnf_data.getFeatures()
+        else:
+            cnf_data.setSplitLiterals(False)
+        features, mask = cnf_data.getFeatures(check_positive=(not args.neuro_sat))
 
         data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
                         edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
@@ -177,7 +195,8 @@ if __name__ == '__main__':
         solver_instances.append(getSolver(cnf_data.formula, cnf_data.n_vars))
         train_data_loaded.append(data)
         id += 1
-
+        #if id % 50000 == 0:
+        #    break
     train_loader = DataLoader(train_data_loaded, batch_size=args.batch_size, shuffle=True)
 
     print("Finished!")
@@ -185,9 +204,12 @@ if __name__ == '__main__':
 
     print("Loading test data...")
     for cnf_data in tqdm(test_data_unsat):
+        cnf_data.edge_features = [[[1,0], [-1,0]], [[0,1], [0,-1]]]
         if args.neuro_sat:
             cnf_data.setSplitLiterals(True)
-        features, mask = cnf_data.getFeatures()
+        else:
+            cnf_data.setSplitLiterals(False)
+        features, mask = cnf_data.getFeatures(check_positive=(not args.neuro_sat))
 
         data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
                         edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
@@ -198,9 +220,12 @@ if __name__ == '__main__':
         id += 1
     
     for cnf_data in tqdm(test_data_sat):
+        cnf_data.edge_features = [[[1,0], [-1,0]], [[0,1], [0,-1]]]
         if args.neuro_sat:
             cnf_data.setSplitLiterals(True)
-        features, mask = cnf_data.getFeatures()
+        else:
+            cnf_data.setSplitLiterals(False)
+        features, mask = cnf_data.getFeatures(check_positive=(not args.neuro_sat))
 
         data = Data(x=torch.tensor(features).float(), edge_index=torch.tensor(cnf_data.edge_index), mask=torch.tensor(mask),
                         edge_attr=torch.tensor(cnf_data.edge_attr).float(), y_mus=torch.tensor(cnf_data.mus_bin).float(),
@@ -210,24 +235,30 @@ if __name__ == '__main__':
         test_data_loaded.append(data)
         id += 1
     
-    test_loader = DataLoader(test_data_loaded, batch_size=args.batch_size, shuffle=False)
+    test_loader = DataLoader(test_data_loaded, batch_size=args.batch_size, shuffle=True)
+
+    del train_data_unsat, train_data_sat, test_data_unsat, test_data_sat
 
     print("Finished!")
 
     print("Loading model...")
     if args.neuro_sat:
-        model = NeuroSAT(iterations=5)
+        model = NeuroSAT(iterations=24)
         optim = torch.optim.Adam(model.parameters(), lr=0.00002)
+        loss_func = torch.nn.BCEWithLogitsLoss()
     else:
         if args.transfer_learning != "":
             model_loaded = torch.load(args.transfer_learning)
             model = NeuroMUSX_V2(model_loaded[1])
             model.load_state_dict(model_loaded[0])
         else:
-            model = NeuroMUSX_V2(args.layers)
-        optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+            model = NeuroMUSX_V2(args.layers)#, d_hidden=2, heads=2)
+        with open(args.plot_save_dir + "model_info.txt", "w") as f:
+            print(args, file=f)
+            print(model, file=f)
+        optim = torch.optim.Adam(model.parameters())
         loss_func = Loss_NeuroMUSX(torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(total_negative/total_positive)), 
-                                   torch.nn.BCEWithLogitsLoss())
+                                   torch.nn.BCEWithLogitsLoss(), L1=0, L2=1)
     
     print("Finished!")
 
@@ -262,40 +293,53 @@ if __name__ == '__main__':
             batch = data.batch.detach().cpu().numpy()
             id_cpu = data.id.detach().cpu().numpy()
 
-            y_mus_cpu = data.y_mus.detach().cpu().numpy()
             y_sat_cpu = data.y_sat.detach().cpu().numpy()
 
-            out = model(data, batch)
-            
-            pred_mus = torch.sigmoid(out[0]).detach().cpu().numpy() * mask
-            pred_sat = torch.sigmoid(out[1]).detach().cpu().numpy()
-            pred_sat = np.round(pred_sat)
-
             if args.neuro_sat:
-                continue
-            else:
-                loss = loss_func(out[0], data.y_mus, out[1], data.y_sat, batch, mask)
-                sum_loss += float(loss)
+                out = model(data)
+                pred_sat = torch.sigmoid(out).detach().cpu().numpy()
+                pred_sat = np.round(pred_sat)
+
+                loss = loss_func(out, data.y_sat)
                 loss.backward()
                 optim.step()
+                sum_loss += float(loss)
+            else:
+                out = model(data, batch)
+                pred_sat = torch.sigmoid(out[1]).detach().cpu().numpy()
+                pred_sat = np.round(pred_sat)
 
-            sum_mus_correct += (np.sum(mask) - np.count_nonzero(np.round(pred_mus) - y_mus_cpu))/np.sum(mask)*len(data)
+                loss = loss_func(out[0], data.y_mus, out[1], data.y_sat, batch, mask)
+                loss.backward()
+                optim.step()
+                sum_loss += float(loss)
+
+            if not args.neuro_sat:
+                pred_mus = torch.sigmoid(out[0]).detach().cpu().numpy() * mask
+                y_mus_cpu = data.y_mus.detach().cpu().numpy()
+                sum_mus_correct += (np.sum(mask) - np.count_nonzero(np.round(pred_mus) - y_mus_cpu))/np.sum(mask)*len(data)
+                if epoch % args.test_epochs == 0:
+                    sum_score += getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id_cpu, solver_instances, mask)
             sum_sat_correct += len(data) - np.count_nonzero(pred_sat - y_sat_cpu)
-            if epoch % args.test_epochs == 0:
-                sum_score += getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id_cpu, solver_instances, mask)
+        #print(sum_sat_correct, len(train_data_loaded))
         sum_sat_correct /= len(train_data_loaded)
         sum_score /= len(train_data_loaded)
+        #print(loss, torch.binary_cross_entropy_with_logits(out, data.y_sat))
+        #print(out, torch.sigmoid(out))
+        #print(data.y_sat)
         if args.random:
             sum_score *= 2
-        sum_mus_correct /= len(train_data_loaded)
-        sum_loss /= len(train_data_loaded)
+        
+        sum_loss /= int(len(train_data_loaded)/args.batch_size)
 
         train_loss.append(sum_loss)
-        train_mus_correct.append(sum_mus_correct)
         train_sat_correct.append(sum_sat_correct)
 
+        if not args.neuro_sat:
+            sum_mus_correct /= len(train_data_loaded)
+            train_mus_correct.append(sum_mus_correct)
+        
         if epoch % args.test_epochs == 0:
-            sum_loss /= len(train_data_loaded)
             train_score.append(sum_score)
         
         print("Epoch: {} Loss: {} MUS: {} SAT: {} Score: {}".format(epoch, sum_loss, sum_mus_correct, sum_sat_correct, sum_score))
@@ -316,39 +360,48 @@ if __name__ == '__main__':
                     batch = data.batch.detach().cpu().numpy()
                     id_cpu = data.id.detach().cpu().numpy()
 
-                    y_mus_cpu = data.y_mus.detach().cpu().numpy()
                     y_sat_cpu = data.y_sat.detach().cpu().numpy()
 
-                    out = model(data, batch)
-                    
-                    pred_mus = torch.sigmoid(out[0]).detach().cpu().numpy() * mask
-                    pred_sat = torch.sigmoid(out[1]).detach().cpu().numpy()
-                    pred_sat = np.round(pred_sat)
-
                     if args.neuro_sat:
-                        continue
+                        out = model(data)
+                        pred_sat = torch.sigmoid(out).detach().cpu().numpy()
+                        pred_sat = np.round(pred_sat)
+
+                        loss = loss_func(out, data.y_sat)
+                        sum_loss += float(loss)
                     else:
+                        out = model(data, batch, print_data=True)
+                        pred_sat = torch.sigmoid(out[1]).detach().cpu().numpy()
+                        pred_sat = np.round(pred_sat)
+
                         loss = loss_func(out[0], data.y_mus, out[1], data.y_sat, batch, mask)
                         sum_loss += float(loss)
 
-                    sum_mus_correct += (np.sum(mask) - np.count_nonzero(np.round(pred_mus) - y_mus_cpu))/np.sum(mask)*len(data)
+                    if not args.neuro_sat:
+                        pred_mus = torch.sigmoid(out[0]).detach().cpu().numpy() * mask
+                        y_mus_cpu = data.y_mus.detach().cpu().numpy()
+                        sum_mus_correct += (np.sum(mask) - np.count_nonzero(np.round(pred_mus) - y_mus_cpu))/np.sum(mask)*len(data)
+                        sum_score += getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id_cpu, solver_instances, mask)
                     sum_sat_correct += len(data) - np.count_nonzero(pred_sat - y_sat_cpu)
-                    sum_score += getScores(batch, pred_mus, y_mus_cpu, y_sat_cpu, id_cpu, solver_instances, mask)
-
+                #print(sum_sat_correct, len(test_data_loaded))
                 sum_sat_correct /= len(test_data_loaded)
                 sum_score /= len(test_data_loaded)
                 if args.random:
                     sum_score *= 2
-                sum_loss /= len(test_data_loaded)
-                sum_mus_correct /= len(test_data_loaded)
+                sum_loss /= int(len(test_data_loaded)/args.batch_size)
 
                 test_loss.append(sum_loss)
-                test_mus_correct.append(sum_mus_correct)
                 test_sat_correct.append(sum_sat_correct)
                 test_score.append(sum_score)
+
+                if not args.neuro_sat:
+                    sum_mus_correct /= len(test_data_loaded)
+                    test_mus_correct.append(sum_mus_correct)
+                    
                 if epoch == args.test_epochs:
                     test_loss.append(sum_loss)
-                    test_mus_correct.append(sum_mus_correct)
+                    if not args.neuro_sat:
+                        test_mus_correct.append(sum_mus_correct)
                     test_sat_correct.append(sum_sat_correct)
                     test_score.append(sum_score)
                     train_score.append(train_score[0])

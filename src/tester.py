@@ -19,7 +19,7 @@ class Tester():
 
         self.model.eval()
         with torch.no_grad():
-            out = self.model(data)
+            out = self.model(data, data.batch)
 
             out_final = torch.sigmoid(out[0]).numpy() * mask - (1-mask)
             return out_final

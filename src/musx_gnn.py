@@ -10,8 +10,7 @@
 ##  Edited on: July 21, 2023
 ##      Author: Sota Moriyama
 ##
-
-#
+##
 #==============================================================================
 from __future__ import print_function
 import getopt
@@ -21,7 +20,7 @@ from pysat.solvers import Solver
 import re
 import sys
 from tester import Tester
-from models import NeuroMUSX
+from models import NeuroMUSX, NeuroMUSX_V2
 from util.data import CNFData
 from musx_org import MUSX as MUSX_Org
 import numpy as np
@@ -277,7 +276,7 @@ def usage():
 if __name__ == '__main__':
     os.chdir("../src")
     solver, verbose, files, gnn, output_file = parse_options()
-    tester = Tester(gnn, NeuroMUSX)
+    tester = Tester(gnn, NeuroMUSX_V2)
     check_both = True
     TIMEOUT = 1000
 

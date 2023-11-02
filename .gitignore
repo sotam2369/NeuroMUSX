@@ -1,6 +1,6 @@
 __pycache__/
 /dataset
 /models
-/plots
+/plots*
 /log
 /satcomp2011

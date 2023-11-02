@@ -14,9 +14,14 @@ class Solver():
         return cnf
 
     def getOutput(self, input_cnf, command):
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout_data = p.communicate(input=' '.join(input_cnf).encode())
+        self.p = subprocess.Popen(command, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout_data = self.p.communicate(input=' '.join(input_cnf).encode())
+        self.p = None
         return stdout_data[0].decode()
+
+    def killProcess(self, signum, frame):
+        if not self.p is None:
+            self.p.kill()
 
 class Forqes(Solver):
 
